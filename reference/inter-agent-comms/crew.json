@@ -1,0 +1,30 @@
+{
+  "repo": "<org>/<repo>",
+  "agents": {
+    "bridge": {
+      "label": "agent:bridge",
+      "color": "White",
+      "role": "Architect & Coordinator"
+    },
+    "cortex": {
+      "label": "agent:cortex",
+      "color": "Amber",
+      "role": "Intelligence Officer (ML/Data)"
+    },
+    "nexus": {
+      "label": "agent:nexus",
+      "color": "Blue",
+      "role": "Experience Designer"
+    },
+    "prism": {
+      "label": "agent:prism",
+      "color": "Purple",
+      "role": "Web Experience Designer"
+    },
+    "beacon": {
+      "label": "agent:beacon",
+      "color": "Green",
+      "role": "Marketing & Growth Officer"
+    }
+  }
+}
