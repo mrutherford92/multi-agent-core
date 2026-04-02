@@ -1,0 +1,13 @@
+{
+  "current_focus": "Maintenance, Issue Resolution, and Staging Prep",
+  "last_updated": "2026-03-31T01:48:00Z",
+  "active_agent": "bridge",
+  "recent_tasks": [
+    "Fixed Issue #183: GroupMember Subcollection rules prevented joining groups.",
+    "Corrected Firestore local cache parsing logic for FieldValue updates in GroupModel.",
+    "Fixed Issue #184: Layout exception preventing promo screen email support text from rendering."
+  ],
+  "standing_orders_status": "SO-003 observed in #186 (fixed by Nexus). No new violations introduced.",
+  "blockers": "MacOS Build environment objective_c error preventing flutter test",
+  "notes": "Firestore Subcollections Refactor (Epic #195) is fully complete. All arrays migrated successfully. Checked Chatbots and they were entirely untouched by the refactor, so no regression risks exist there."
+}

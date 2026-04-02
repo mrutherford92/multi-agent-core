@@ -399,6 +399,18 @@ def cmd_email(args):
         print("❌ Failed to send email.")
 
 
+def cmd_write(args):
+    """Safely write content to a file, replacing it entirely."""
+    file_path = Path(args.path)
+    try:
+        print(f"📝 Writing to {file_path}...")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(args.content)
+        print(f"✅ Successfully wrote to {file_path}")
+    except Exception as e:
+        print(f"❌ Failed to write file: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="🛸 NeuroArts Agent System CLI",
@@ -450,6 +462,11 @@ Examples:
     email_parser.add_argument("--subject", required=True, help="Email subject line")
     email_parser.add_argument("--body", required=True, help="HTML body content")
 
+    # write
+    write_parser = subparsers.add_parser("write", help="Safely rewrite a file")
+    write_parser.add_argument("path", help="Path to file")
+    write_parser.add_argument("content", help="Content to write")
+
     args = parser.parse_args()
 
     commands = {
@@ -461,6 +478,7 @@ Examples:
         "logs": cmd_logs,
         "search": cmd_search,
         "email": cmd_email,
+        "write": cmd_write,
     }
 
     commands[args.command](args)
