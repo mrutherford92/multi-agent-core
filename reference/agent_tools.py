@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """
-agent_tools.py — NeuroArts Multi-Agent System CLI
+agent_tools.py — Syndicate Multi-Agent System CLI (Firestore Edition)
 
 Manage the agent communication system from the command line.
-Uses `gh` CLI for GitHub Issues and reads local reference files.
-
-Usage:
-    python reference/agent_tools.py status    # View agent statuses
-    python reference/agent_tools.py tasks     # List open agent tasks
-    python reference/agent_tools.py assign nexus "Fix notification badges"
-    python reference/agent_tools.py handoff bridge nexus "Audio pipeline data"
-    python reference/agent_tools.py health    # System health check
-    python reference/agent_tools.py logs      # Recent starfleet log entries
+Uses Firebase Firestore for global task management (No GH Token Needed).
 """
-
 import argparse
 import json
 import subprocess
 import sys
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO = "mrutherford92/neuro-arts-flutter"
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+except ImportError:
+    print("ERROR: firebase-admin not installed. Run 'pip install firebase-admin'")
+    sys.exit(1)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 COMMS_DIR = SCRIPT_DIR / "inter-agent-comms"
 
@@ -38,434 +36,165 @@ REQUIRED_LABELS = [
     "agent-task", "handoff", "directive", "blocked",
 ]
 
-
-def run_gh(args: list[str], check: bool = True) -> str:
-    """Run a gh CLI command and return stdout."""
+def get_db():
     try:
-        result = subprocess.run(
-            ["gh"] + args,
-            capture_output=True, text=True, check=check
-        )
-        return result.stdout.strip()
-    except FileNotFoundError:
-        print("ERROR: `gh` CLI not found. Install: https://cli.github.com/")
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: gh command failed: {e.stderr.strip()}")
-        return ""
+        app = firebase_admin.get_app()
+    except ValueError:
+        # Check local path for development vs ambient GCP auth (Cloud Run)
+        cred_path = os.path.expanduser("~/vocalbrain-adminsdk.json")
+        if os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred, {"projectId": "vocalbrain-web"})
+        else:
+            firebase_admin.initialize_app({"projectId": "vocalbrain-web"})
+    return firestore.client()
 
 
 def cmd_status(args):
-    """Show agent status from local JSON files and GitHub Issues."""
+    db = get_db()
     print("=" * 60)
     print("🛸 NEUROARTS CREW STATUS")
     print("=" * 60)
 
     status_dir = COMMS_DIR / "status"
-    if not status_dir.exists():
-        print("\n⚠️  No status directory found at:", status_dir)
-        return
-
     for agent_name, info in AGENTS.items():
         status_file = status_dir / f"{agent_name}.json"
         print(f"\n{'─' * 40}")
-        print(f"{'🔵' if agent_name == 'nexus' else '🟠' if agent_name == 'cortex' else '🟣' if agent_name == 'prism' else '🟢' if agent_name == 'beacon' else '⬜'} {agent_name.upper()} — {info['role']}")
+        print(f"{agent_name.upper()} — {info['role']}")
 
         if status_file.exists():
             try:
                 data = json.loads(status_file.read_text())
                 status = data.get("status", "unknown")
-                last_task = data.get("lastTask") or data.get("currentMission") or "N/A"
-                blockers = data.get("blockers")
-                timestamp = data.get("timestamp") or data.get("lastActive") or "N/A"
-
-                status_icon = "✅" if status == "completed" else "🔴" if status == "blocked" else "🔄" if status == "in-progress" else "❓"
-                print(f"  Status: {status_icon} {status}")
-                print(f"  Last task: {last_task[:80]}{'...' if len(last_task) > 80 else ''}")
-                if blockers:
-                    print(f"  ⚠️  Blocker: {blockers}")
-                print(f"  Updated: {timestamp}")
-            except json.JSONDecodeError:
-                print("  ⚠️  Invalid JSON in status file")
-        else:
-            print("  ⚠️  No status file")
-
-        # Count open GitHub issues for this agent
-        output = run_gh(["issue", "list", "--label", info["label"],
-                        "--state", "open", "--repo", REPO, "--json", "number"], check=False)
-        if output:
-            try:
-                issues = json.loads(output)
-                count = len(issues)
-                if count > 0:
-                    print(f"  📋 {count} open GitHub issue(s)")
-            except json.JSONDecodeError:
-                pass
+                last_task = data.get("lastTask", "N/A")
+                print(f"  Status: {status}")
+                print(f"  Last task: {last_task[:80]}")
+            except Exception:
+                print("  ⚠️  Invalid status JSON")
+        
+        # Poll Firestore for agent tasks
+        tasks = db.collection('agent_tasks').where('labels', 'array_contains', info['label']).where('state', '==', 'open').get()
+        if len(tasks) > 0:
+            print(f"  📋 {len(tasks)} open Firestore task(s)")
 
     print(f"\n{'=' * 60}")
 
 
 def cmd_tasks(args):
-    """List all open agent tasks from GitHub."""
-    print("📋 OPEN AGENT TASKS")
+    db = get_db()
+    print("📋 OPEN AGENT TASKS (FIRESTORE)")
     print("=" * 60)
 
-    output = run_gh([
-        "issue", "list", "--label", "agent-task", "--state", "open",
-        "--repo", REPO, "--json", "number,title,labels,updatedAt",
-    ])
-
-    if not output:
-        print("\nNo open agent tasks.")
+    tasks_ref = db.collection('agent_tasks').where('state', '==', 'open').get()
+    
+    if not tasks_ref:
+        print("\nNo open agent tasks in Firestore.")
         return
 
-    try:
-        issues = json.loads(output)
-    except json.JSONDecodeError:
-        print("ERROR: Could not parse GitHub response")
-        return
-
-    if not issues:
-        print("\nNo open agent tasks.")
-        return
-
-    for issue in issues:
-        labels = ", ".join(l["name"] for l in issue.get("labels", []))
-        print(f"\n  #{issue['number']}: {issue['title']}")
+    for doc in tasks_ref:
+        task = doc.to_dict()
+        labels = ", ".join(task.get('labels', []))
+        print(f"\n  #{doc.id[:6]}: {task.get('title', 'Unknown')}")
         print(f"    Labels: {labels}")
-        print(f"    Updated: {issue['updatedAt'][:10]}")
-
-    # Also show directives
-    print(f"\n{'─' * 40}")
-    print("📡 ACTIVE DIRECTIVES")
-
-    dir_output = run_gh([
-        "issue", "list", "--label", "directive", "--state", "open",
-        "--repo", REPO, "--json", "number,title",
-    ])
-
-    if dir_output:
-        try:
-            directives = json.loads(dir_output)
-            for d in directives:
-                print(f"  #{d['number']}: {d['title']}")
-        except json.JSONDecodeError:
-            pass
-
+        print(f"    Updated: {task.get('updatedAt', 'Unknown')[:10]}")
     print(f"\n{'=' * 60}")
 
 
 def cmd_assign(args):
-    """Create a task issue for a specific agent."""
+    db = get_db()
     agent = args.agent.lower()
     if agent not in AGENTS:
-        print(f"ERROR: Unknown agent '{agent}'. Choose from: {', '.join(AGENTS.keys())}")
+        print(f"ERROR: Unknown agent '{agent}'.")
         sys.exit(1)
 
-    title = f"[{agent.upper()}] {args.title}"
-    labels = f"agent-task,{AGENTS[agent]['label']}"
-
-    body = f"""## Orders
-{args.title}
-
-## Context
-Created via `agent_tools.py assign` by Captain Michael.
-
-## Acceptance Criteria
-- [ ] Task completed as described
-- [ ] No Standing Order 003 violations
-
-## Notes
-Created: {datetime.now(timezone.utc).isoformat()}
-"""
-
-    output = run_gh([
-        "issue", "create", "--repo", REPO,
-        "--title", title,
-        "--label", labels,
-        "--body", body,
-    ])
-
-    print(f"✅ Task created for {agent.upper()}: {output}")
+    now = datetime.now(timezone.utc).isoformat()
+    db.collection('agent_tasks').add({
+        "title": f"[{agent.upper()}] {args.title}",
+        "body": f"Created via Firestore Link.\n\nOrders: {args.title}",
+        "state": "open",
+        "labels": ["agent-task", AGENTS[agent]['label']],
+        "createdAt": now,
+        "updatedAt": now
+    })
+    print(f"✅ Mission injected into Firestore for {agent.upper()}")
 
 
 def cmd_handoff(args):
-    """Create a handoff issue between agents."""
-    from_agent = args.from_agent.lower()
-    to_agent = args.to_agent.lower()
-
-    for name in [from_agent, to_agent]:
-        if name not in AGENTS:
-            print(f"ERROR: Unknown agent '{name}'. Choose from: {', '.join(AGENTS.keys())}")
-            sys.exit(1)
-
-    title = f"[{from_agent.upper()}→{to_agent.upper()}] {args.title}"
-    labels = f"agent-task,handoff,{AGENTS[to_agent]['label']}"
-
-    body = f"""## Context
-Handoff from {from_agent.upper()} to {to_agent.upper()}.
-
-## Task
-{args.title}
-
-## Key Files
-<!-- Add relevant file paths -->
-
-## Gotchas
-<!-- Add any warnings -->
-
-## Notes
-Created: {datetime.now(timezone.utc).isoformat()}
-"""
-
-    output = run_gh([
-        "issue", "create", "--repo", REPO,
-        "--title", title,
-        "--label", labels,
-        "--body", body,
-    ])
-
-    print(f"✅ Handoff created ({from_agent.upper()} → {to_agent.upper()}): {output}")
+    db = get_db()
+    from_agent, to_agent = args.from_agent.lower(), args.to_agent.lower()
+    
+    now = datetime.now(timezone.utc).isoformat()
+    db.collection('agent_tasks').add({
+        "title": f"[{from_agent.upper()}→{to_agent.upper()}] {args.title}",
+        "body": f"Handoff from {from_agent.upper()} to {to_agent.upper()}.\n\n{args.title}",
+        "state": "open",
+        "labels": ["agent-task", "handoff", AGENTS[to_agent]['label']],
+        "createdAt": now,
+        "updatedAt": now
+    })
+    print(f"✅ Handoff injected into Firestore: {from_agent.upper()} → {to_agent.upper()}")
 
 
 def cmd_health(args):
-    """Run system health checks."""
-    print("🩺 SYSTEM HEALTH CHECK")
+    print("🩺 FIRESTORE SYSTEM HEALTH CHECK")
     print("=" * 60)
-    issues_found = 0
-
-    # 1. Check gh auth
-    print("\n1. GitHub CLI authentication...")
-    auth = run_gh(["auth", "status"], check=False)
-    if "Logged in" in auth or "✓" in auth:
-        print("   ✅ Authenticated")
-    else:
-        print("   ❌ Not authenticated — run `gh auth login`")
-        issues_found += 1
-
-    # 2. Check labels
-    print("\n2. GitHub labels...")
-    label_output = run_gh(["label", "list", "--repo", REPO, "--json", "name"])
-    if label_output:
-        try:
-            existing = {l["name"] for l in json.loads(label_output)}
-            for label in REQUIRED_LABELS:
-                if label in existing:
-                    print(f"   ✅ {label}")
-                else:
-                    print(f"   ❌ Missing: {label}")
-                    issues_found += 1
-        except json.JSONDecodeError:
-            print("   ⚠️  Could not parse label list")
-
-    # 3. Check issue templates
-    print("\n3. Issue templates...")
-    template_dir = SCRIPT_DIR.parent / ".github" / "ISSUE_TEMPLATE"
-    expected_templates = ["agent-task.md", "agent-handoff.md", "directive.md"]
-    for tmpl in expected_templates:
-        path = template_dir / tmpl
-        if path.exists():
-            print(f"   ✅ {tmpl}")
-        else:
-            print(f"   ❌ Missing: {tmpl}")
-            issues_found += 1
-
-    # 4. Check status files
-    print("\n4. Agent status files...")
-    status_dir = COMMS_DIR / "status"
-    for agent_name in AGENTS:
-        sf = status_dir / f"{agent_name}.json"
-        if sf.exists():
-            try:
-                data = json.loads(sf.read_text())
-                ts = data.get("timestamp", data.get("lastActive", ""))
-                if ts:
-                    print(f"   ✅ {agent_name}.json (updated: {ts[:10]})")
-                else:
-                    print(f"   ⚠️  {agent_name}.json (no timestamp)")
-            except json.JSONDecodeError:
-                print(f"   ❌ {agent_name}.json — invalid JSON")
-                issues_found += 1
-        else:
-            print(f"   ❌ {agent_name}.json — missing")
-            issues_found += 1
-
-    # 5. Check stale issues (open > 7 days with no update)
-    print("\n5. Stale issues (open > 7 days)...")
-    stale_output = run_gh([
-        "issue", "list", "--label", "agent-task", "--state", "open",
-        "--repo", REPO, "--json", "number,title,updatedAt",
-    ])
-    if stale_output:
-        try:
-            stale_issues = json.loads(stale_output)
-            now = datetime.now(timezone.utc)
-            for issue in stale_issues:
-                updated = datetime.fromisoformat(issue["updatedAt"].replace("Z", "+00:00"))
-                age = (now - updated).days
-                if age > 7:
-                    print(f"   ⚠️  #{issue['number']} ({age}d old): {issue['title'][:50]}")
-                    issues_found += 1
-            if not any((now - datetime.fromisoformat(i["updatedAt"].replace("Z", "+00:00"))).days > 7 for i in stale_issues):
-                print("   ✅ No stale issues")
-        except (json.JSONDecodeError, ValueError):
-            pass
-    else:
-        print("   ✅ No open agent tasks")
-
-    # 6. Check directives
-    print("\n6. Active directives...")
-    dir_path = COMMS_DIR / "directives"
-    if dir_path.exists():
-        directives = [f for f in dir_path.iterdir() if f.suffix == ".md" and f.name != "README.md"]
-        for d in sorted(directives):
-            print(f"   📡 {d.name}")
-    else:
-        print("   ⚠️  No directives directory")
-
-    # Summary
+    try:
+        db = get_db()
+        # Test connection
+        db.collection('agent_tasks').limit(1).get()
+        print("   ✅ Firestore connection authenticated!")
+    except Exception as e:
+        print(f"   ❌ Firestore Error: {e}")
     print(f"\n{'=' * 60}")
-    if issues_found == 0:
-        print("✅ ALL SYSTEMS NOMINAL")
-    else:
-        print(f"⚠️  {issues_found} issue(s) found — review above")
-    print(f"{'=' * 60}")
 
 
+# Add stubs for logs, search, email, write so integrations don't break
 def cmd_logs(args):
-    """Show recent starfleet log entries."""
-    logs_dir = COMMS_DIR / "starfleet-logs"
-    if not logs_dir.exists():
-        print("⚠️  No starfleet-logs directory")
-        return
-
-    log_files = sorted(logs_dir.glob("*.md"), reverse=True)
-    count = min(args.count, len(log_files))
-
-    if not log_files:
-        print("No starfleet log entries.")
-        return
-
-    print(f"📒 RECENT STARFLEET LOGS (showing {count} of {len(log_files)})")
-    print("=" * 60)
-
-    for log_file in log_files[:count]:
-        content = log_file.read_text()
-        print(f"\n{'─' * 40}")
-        # Show first 20 lines as preview
-        lines = content.strip().split("\n")
-        for line in lines[:20]:
-            print(f"  {line}")
-        if len(lines) > 20:
-            print(f"  ... ({len(lines) - 20} more lines)")
-
-    print(f"\n{'=' * 60}")
-
+    print("Log viewing available in IDE.")
 
 def cmd_search(args):
-    """Fast search using git grep across the repository."""
-    print(f"🔍 Searching for '{args.query}'...")
-    try:
-        result = subprocess.run(
-            ["git", "grep", "-inI", args.query],
-            cwd=SCRIPT_DIR.parent,
-            capture_output=True, text=True
-        )
-        if result.stdout:
-            print(result.stdout)
-        else:
-            print("No results found.")
-    except Exception as e:
-        print(f"Search error: {e}")
-
-
-def cmd_email(args):
-    """Send an email using the admin-tool send_email script."""
-    print(f"📧 Sending email to {args.to}...")
-    email_script = SCRIPT_DIR.parent / "projects/admin-tool/scripts/utils/send_email.py"
-    if not email_script.exists():
-        print(f"❌ Error: {email_script} not found.")
-        return
-
-    cmd = [
-        sys.executable, str(email_script),
-        "--to", args.to,
-        "--subject", args.subject,
-        "--body", args.body
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError:
-        print("❌ Failed to send email.")
-
+    subprocess.run(["git", "grep", "-inI", args.query], cwd=SCRIPT_DIR.parent)
 
 def cmd_write(args):
-    """Safely write content to a file, replacing it entirely."""
-    file_path = Path(args.path)
-    try:
-        print(f"📝 Writing to {file_path}...")
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(args.content)
-        print(f"✅ Successfully wrote to {file_path}")
-    except Exception as e:
-        print(f"❌ Failed to write file: {e}")
+    Path(args.path).write_text(args.content)
+
+def cmd_email(args):
+    print("Command deprecated.")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="🛸 NeuroArts Agent System CLI",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  status     Show all agent statuses
-  tasks      List open GitHub Issues for agents
-  assign     Create a task for an agent
-  handoff    Create a cross-agent handoff
-  health     Run system health checks
-  logs       View recent starfleet logs
-        """
-    )
-
+    parser = argparse.ArgumentParser(description="🛸 Syndicate Firestore CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # status
     subparsers.add_parser("status", help="Show agent statuses")
+    subparsers.add_parser("tasks", help="List open tasks")
+    
+    assign_parser = subparsers.add_parser("assign", help="Create an agent task")
+    assign_parser.add_argument("agent")
+    assign_parser.add_argument("title")
 
-    # tasks
-    subparsers.add_parser("tasks", help="List open agent tasks")
+    handoff_parser = subparsers.add_parser("handoff", help="Create handoff")
+    handoff_parser.add_argument("from_agent")
+    handoff_parser.add_argument("to_agent")
+    handoff_parser.add_argument("title")
 
-    # assign
-    assign_parser = subparsers.add_parser("assign", help="Create a task for an agent")
-    assign_parser.add_argument("agent", help="Agent name (nexus, cortex, prism, beacon, bridge)")
-    assign_parser.add_argument("title", help="Task description")
-
-    # handoff
-    handoff_parser = subparsers.add_parser("handoff", help="Create an agent handoff")
-    handoff_parser.add_argument("from_agent", help="Source agent")
-    handoff_parser.add_argument("to_agent", help="Target agent")
-    handoff_parser.add_argument("title", help="Handoff description")
-
-    # health
     subparsers.add_parser("health", help="System health check")
-
-    # logs
-    logs_parser = subparsers.add_parser("logs", help="View starfleet logs")
-    logs_parser.add_argument("-n", "--count", type=int, default=3, help="Number of logs to show")
-
-    # search
-    search_parser = subparsers.add_parser("search", help="Fast repository-wide search")
-    search_parser.add_argument("query", help="Text to search for")
-
-    # email
-    email_parser = subparsers.add_parser("email", help="Send an email")
-    email_parser.add_argument("--to", required=True, help="Recipient email address")
-    email_parser.add_argument("--subject", required=True, help="Email subject line")
-    email_parser.add_argument("--body", required=True, help="HTML body content")
-
-    # write
-    write_parser = subparsers.add_parser("write", help="Safely rewrite a file")
-    write_parser.add_argument("path", help="Path to file")
-    write_parser.add_argument("content", help="Content to write")
+    
+    # stubs
+    logs = subparsers.add_parser("logs", help="logs")
+    logs.add_argument("-n", "--count", type=int, default=3)
+    
+    search = subparsers.add_parser("search")
+    search.add_argument("query")
+    
+    write = subparsers.add_parser("write")
+    write.add_argument("path")
+    write.add_argument("content")
+    
+    email = subparsers.add_parser("email")
+    email.add_argument("--to")
+    email.add_argument("--subject")
+    email.add_argument("--body")
 
     args = parser.parse_args()
 
@@ -477,12 +206,10 @@ Examples:
         "health": cmd_health,
         "logs": cmd_logs,
         "search": cmd_search,
-        "email": cmd_email,
         "write": cmd_write,
+        "email": cmd_email,
     }
-
     commands[args.command](args)
-
 
 if __name__ == "__main__":
     main()

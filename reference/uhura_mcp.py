@@ -89,7 +89,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.serve:
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Route
+        from mcp.server.sse import SseServerTransport
+
         print(f"📡 Uhura MCP standing by on http://0.0.0.0:{args.port}/sse", file=sys.stderr)
-        mcp.run(transport="sse")
+        
+        sse = SseServerTransport("/messages")
+
+        async def handle_sse(request):
+            async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+                # FastMCP usually stores the core standard Server instance at mcp._mcp_server
+                server = getattr(mcp, "_mcp_server", mcp) 
+                await server.run(streams[0], streams[1], server.create_initialization_options())
+
+        async def handle_messages(request):
+            await sse.handle_post_message(request.scope, request.receive, request._send)
+
+        app = Starlette(routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ])
+        
+        uvicorn.run(app, host="0.0.0.0", port=args.port)
     else:
         mcp.run()

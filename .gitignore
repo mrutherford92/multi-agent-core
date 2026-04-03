@@ -1,0 +1,21 @@
+# Environments
+venv/
+env/
+.venv/
+.env/
+reference/venv/
+
+# Environment Variables
+.env
+.env.local
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
