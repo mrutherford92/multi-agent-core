@@ -1,6 +1,6 @@
-# AYI Nexus Reference UI Audit Index
+# AYI Aegis Reference UI Audit Index
 
-As requested, this index contains a manual review of all UI and routing components in the `ayi-nexus` application. 
+As requested, this index contains a manual review of all UI and routing components in the `ayi-aegis` application. 
 The objective of this index is to verify strict adherence to **Standing Order 003**: Zero Tolerance for fake data, placeholder UI elements ("coming soon", "not implemented"), and swallowed exceptions. 
 
 ## `src/components` Review
@@ -75,7 +75,7 @@ The objective of this index is to verify strict adherence to **Standing Order 00
 
 ## Unit Test Coverage Analysis
 
-A complete Vitest coverage run using the V8 engine has been executed across the codebase (`projects/ayi-nexus`). All parsing obstacles (`SalesLanding.tsx` JSX rendering under JSDOM) were repaired, enabling full system reporting.
+A complete Vitest coverage run using the V8 engine has been executed across the codebase (`projects/ayi-aegis`). All parsing obstacles (`SalesLanding.tsx` JSX rendering under JSDOM) were repaired, enabling full system reporting.
 
 ### Global Coverage Summary
 - **Lines Coverage:** `77.6%` (634 / 817 lines verified)
